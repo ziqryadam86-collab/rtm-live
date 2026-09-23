@@ -1,0 +1,64 @@
+name: Build Custom HLS Master Playlist (Berita RTM)
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-playlist:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Deno & yt-dlp
+        run: |
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "/home/runner/.deno/bin" >> $GITHUB_PATH
+
+          sudo wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+
+      - name: Setup Cookies File
+        env:
+          COOKIES_DATA: ${{ secrets.YOUTUBE_COOKIES }}
+        run: |
+          echo "$COOKIES_DATA" > cookies.txt
+
+      - name: Extract Video & Audio Streams and Build Master M3U8
+        run: |
+          # Cipta folder smil:berita jika belum wujud
+          mkdir -p "smil:berita"
+
+          URLS=$(yt-dlp --cookies cookies.txt --js-runtimes deno -g "https://www.youtube.com/live/2BtKvwKyCRA" || true)
+          
+          VIDEO_URL=$(echo "$URLS" | sed -n '1p')
+          AUDIO_URL=$(echo "$URLS" | sed -n '2p')
+
+          TARGET_FILE="smil:berita/index.m3u8"
+
+          if [ -z "$VIDEO_URL" ]; then
+            echo "#EXTM3U" > "$TARGET_FILE"
+          elif [ -z "$AUDIO_URL" ]; then
+            echo "#EXTM3U" > "$TARGET_FILE"
+            echo "#EXT-X-STREAM-INF:BANDWIDTH=3000000" >> "$TARGET_FILE"
+            echo "$VIDEO_URL" >> "$TARGET_FILE"
+          else
+            echo "#EXTM3U" > "$TARGET_FILE"
+            echo '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-main",NAME="English/Main",DEFAULT=YES,AUTOSELECT=YES,URI="'"$AUDIO_URL"'"' >> "$TARGET_FILE"
+            echo '#EXT-X-STREAM-INF:BANDWIDTH=3000000,AUDIO="audio-main"' >> "$TARGET_FILE"
+            echo "$VIDEO_URL" >> "$TARGET_FILE"
+          fi
+
+      - name: Commit and Push to Github
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add "smil:berita/index.m3u8"
+          git commit -m "Auto-update HLS Master Playlist for smil:berita/index.m3u8 [skip ci]" || exit 0
+          git push
